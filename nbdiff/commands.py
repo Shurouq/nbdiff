@@ -9,7 +9,9 @@ from .notebook_parser import NotebookParser
 import json
 import sys
 from .notebook_diff import notebook_diff
-import threading
+from .adapter.git_adapter import GitAdapter
+from .server.local_server import app
+import multiprocessing
 import webbrowser
 import IPython.nbformat.current as nbformat
 
@@ -24,10 +26,17 @@ def diff():
     The resulting diff is presented to the user in the browser at
     http://localhost:5000.
     '''
-    usage = 'nbdiff [-h] [before after]'
+    usage = 'nbdiff [-h] [--browser=<browser] [before after]'
     parser = argparse.ArgumentParser(
         description=description,
         usage=usage,
+    )
+    # TODO share this code with merge()
+    parser.add_argument(
+        '--browser',
+        '-b',
+        default=None,
+        help='Browser to launch nbdiff/nbmerge in',
     )
     parser.add_argument('before', nargs='?',
                         help='The notebook to diff against.')
@@ -61,10 +70,9 @@ def diff():
         print ("Invalid number of arguments. Run nbdiff --help")
         return -1
 
-    from . import server
-    from .server.local_server import app
     app.add_notebook(result)
-    app.run(debug=True)
+    open_browser(args.browser)
+    app.run(debug=False)
 
 
 def merge():
@@ -78,49 +86,38 @@ def merge():
     Positional arguments are available for integration with version
     control systems such as Git and Mercurial.
     '''
-    usage = 'nbmerge [-h] [local base remote [result]]'
+    usage = 'nbmerge [-h] [--browser=<browser>] [local base remote [result]]'
     parser = argparse.ArgumentParser(
         description=description,
         usage=usage,
     )
     parser.add_argument('notebook', nargs='*')
+    # TODO share this code with diff()
+    parser.add_argument(
+        '--browser',
+        '-b',
+        default=None,
+        help='Browser to launch nbdiff/nbmerge in',
+    )
     args = parser.parse_args()
     length = len(args.notebook)
     parser = NotebookParser()
 
     if length == 0:
-        # TODO error handling.
-        # TODO handle more than one notebook file.
-        # TODO ignore non-.ipynb files.
-        output = subprocess.check_output("git ls-files --unmerged".split())
-        output_array = [line.split() for line in output.splitlines()]
-        filename = output_array[0][3]
+        # use only git for now
+        git = GitAdapter()
 
-        if len(output_array) != 3:
-            # TODO This should work for multiple conflicting notebooks.
-            sys.stderr.write(
-                "Can't find the conflicting notebook. Quitting.\n")
-            sys.exit(-1)
+        modified_files = git.get_unmerged_files()
 
-        hash_array = []
-        for line in output_array:
-            hash = line[1]
-            hash_array.append(hash)
-        local_show = subprocess.Popen(
-            ['git', 'show', hash_array[1]],
-            stdout=subprocess.PIPE
-        )
-        nb_local = parser.parse(local_show.stdout)
-        base_show = subprocess.Popen(
-            ['git', 'show', hash_array[0]],
-            stdout=subprocess.PIPE
-        )
-        nb_base = parser.parse(base_show.stdout)
-        remote_show = subprocess.Popen(
-            ['git', 'show', hash_array[2]],
-            stdout=subprocess.PIPE
-        )
-        nb_remote = parser.parse(remote_show.stdout)
+        unmerged_notebooks = git.get_unmerged_notebooks(modified_files)
+
+        # only the first unmerged notebook
+        nb_local = parser.parse(unmerged_notebooks[0][0])
+        nb_base = parser.parse(unmerged_notebooks[0][1])
+        nb_remote = parser.parse(unmerged_notebooks[0][2])
+
+        filename = unmerged_notebooks[0][3]
+
     elif length == 3 or length == 4:
         nb_local = parser.parse(open(args.notebook[0]))
         nb_base = parser.parse(open(args.notebook[1]))
@@ -157,9 +154,6 @@ def merge():
         with open(args.notebook[3], 'w') as resultfile:
             resultfile.write(json.dumps(pre_merged_notebook, indent=2))
     else:
-        from . import server
-        from .server.local_server import app
-
         app.add_notebook(pre_merged_notebook)
 
         def save_notebook(notebook_result):
@@ -168,12 +162,15 @@ def merge():
                 nbformat.write(parsed, targetfile, 'ipynb')
 
         app.shutdown_callback(save_notebook)
+        open_browser(args.browser)
+        app.run(debug=False)
 
-        try:
-            browser = webbrowser.get()
-        except webbrowser.Error:
-            browser = None
-        if browser:
-            b = lambda: browser.open("http://127.0.0.1:5000", new=2)
-            threading.Thread(target=b).start()
-        app.run(debug=True)
+
+def open_browser(browser_exe):
+    try:
+        browser = webbrowser.get(browser_exe)
+    except webbrowser.Error:
+        browser = None
+    if browser:
+        b = lambda: browser.open("http://127.0.0.1:5000", new=2)
+        multiprocessing.Process(target=b).start()
