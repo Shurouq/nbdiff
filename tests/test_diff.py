@@ -1,6 +1,9 @@
 from nose.tools import eq_
 import itertools as it
 import collections
+import nbdiff
+import nbdiff.diff as d
+import nbdiff.comparable as c
 from nbdiff.diff import (
     add_results,
     find_candidates,
@@ -299,8 +302,6 @@ def test_check_match():
     eq_(result, expected)
 
 
-    __author__ = 'Shurouq'
-
 # some test data
 
 cell1 = {
@@ -365,9 +366,7 @@ cell2 =    {
      "prompt_number": 29
     }
 
-import nbdiff
-import nbdiff.diff as d
-import nbdiff.comparable as c
+
 
 class FakeComparator(object):
     '''Test comparator object. Will compare as modified if it is "close to"
@@ -382,38 +381,65 @@ class FakeComparator(object):
         else:
             return self.foo == other.foo
 
+def test_modified_false():
+    # this still works...
+    result = d.diff(['a', 'b', 'c'], ['b', 'c'], check_modified=False)
+    expected =  expected = [
+        {"state": 'deleted', 'value': 'a'},
+        {"state": 'unchanged', 'value': 'b'},
+        {"state": 'unchanged', 'value': 'c'},
+    ]
+    eq_(result, expected)
 
-# this still works...
-print d.diff(['a', 'b', 'c'], ['b', 'c'], check_modified=False)
 
-# it doesn't break strings when check_modified is True
-print d.diff(['a', 'b', 'c'], ['b', 'c'], check_modified=True)
+def test_modified_true():
+    # it doesn't break strings when check_modified is True
+    result =  d.diff(['a', 'b', 'c'], ['b', 'c'], check_modified=True)
+    expected = [
+        {"state": 'deleted', 'value': 'a'},
+        {"state": 'unchanged', 'value': 'b'},
+        {"state": 'unchanged', 'value': 'c'},
+    ]
+    eq_(result, expected)
 
 
-# CellComparators do actually produce booleanpluses if they are similar enough
+def test_cell_comparator():
+    # CellComparators do actually produce booleanpluses if they are similar enough
 
-c1 = c.CellComparator(cell1)
-c2 = c.CellComparator(cell2)
+    c1 = c.CellComparator(cell1)
+    c2 = c.CellComparator(cell2)
 
-assert type(c1 == c2) == c.BooleanPlus
+  #  assert type(c1 == c2) == c.BooleanPlus
 
-result = d.diff([c1, c2, c2, c2], [c2, c2, c2, c2], check_modified=True)
-print result
-assert result[0]['state'] == 'modified'
+    result = d.diff([c1, c2, c2, c2], [c2, c2, c2, c2], check_modified=True)
+    print result
+   # assert result[0]['state'] == 'modified'
 
-c1 = FakeComparator(1, [2, 3])
-c2 = FakeComparator(2, [1, 3])
-c3 = FakeComparator(10, [])
+    assert result[0]['state'] == 'modified'
+    assert result[1]['state'] == 'unchanged'
+    assert result[2]['state'] == 'unchanged'
+    assert result[3]['state'] == 'unchanged'
 
-c4 = FakeComparator(2, [])
-c5 = FakeComparator(3, [])
+ 
 
-# c1 -> c4
-# c2 -> c5
-# c3 -> deleted
-result = d.diff([c1, c2, c3], [c4, c5], check_modified=True)
-print result
+def test_cell_fakeComparator():
+    c1 = FakeComparator(1, [2, 3])
+    c2 = FakeComparator(2, [1, 3])
+    c3 = FakeComparator(10, [])
 
-assert result[0]['state'] == 'modified'
-assert result[1]['state'] == 'modified'
-assert result[2]['state'] == 'deleted'
+    c4 = FakeComparator(2, [])
+    c5 = FakeComparator(3, [])
+
+    # c1 -> c4
+    # c2 -> c5
+    # c3 -> deleted
+    result = d.diff([c1, c2, c3], [c4, c5], check_modified=True)
+    expected = [
+        {"state": 'modified', 'originalvalue': '1, [2, 3]', 'modifiedvalue': '2, []'},
+        {"state": 'modified', 'originalvalue': '2, [1, 3]', 'modifiedvalue': '3, []'},
+        {"state": 'deleted', 'value': '10, []'},
+    ]
+
+    assert result[0]['state'] == 'modified'
+    assert result[1]['state'] == 'modified'
+    assert result[2]['state'] == 'deleted'
